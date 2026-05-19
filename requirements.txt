@@ -1,0 +1,8 @@
+Flask==3.0.2
+gunicorn==21.2.0
+google-cloud-firestore==2.16.0
+google-auth==2.35.0
+python-dotenv==1.0.1
+midtransclient==1.4.2
+apscheduler==3.11.2
+paho-mqtt==2.1.0
