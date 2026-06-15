@@ -1,6 +1,10 @@
-venv/
+.venv/
 __pycache__/
 .env
 rentalgameconsoledb-firebase-adminsdk-fbsvc-0651c7a97d.json
 mosquitto.conf
 .DS_Store
+.dockerignore
+docker-compose.yml
+Dockerfile
+gs-rest-server.tar

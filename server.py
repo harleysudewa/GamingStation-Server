@@ -16,7 +16,6 @@ import threading
 import paho.mqtt.client as mqtt
 import json
 
-
 """ 
 Format respon API:
 {
@@ -43,7 +42,6 @@ def api_response(
         body["message"] = message
 
     return jsonify(body), status_code
-
 
 # Konversi ke format waktu UTC
 def _normalize_to_utc_aware(value: Any) -> Optional[datetime]:
@@ -126,6 +124,20 @@ def init_mqtt_client(config: Dict[str, Any]) -> Optional[mqtt.Client]:
             
         mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"GS-SERVER-{uuid.uuid4().hex[:6]}", transport=transport)
         
+        # Callback saat berhasil terhubung atau reconnect
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code == 0:
+                print(f"[MQTT] ✅ Terhubung ke broker {mqtt_broker}:{mqtt_port} via {transport}")
+            else:
+                print(f"[MQTT ERROR] ❌ Gagal terhubung dengan kode: {reason_code}")
+
+        # Callback saat koneksi terputus
+        def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
+            print(f"[MQTT WARNING] ⚠️ Koneksi terputus (Reason: {reason_code}). Mencoba menyambung kembali secara otomatis...")
+
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_disconnect = on_disconnect
+        
         if mqtt_username and mqtt_password:
             mqtt_client.username_pw_set(mqtt_username, mqtt_password)
             
@@ -135,7 +147,6 @@ def init_mqtt_client(config: Dict[str, Any]) -> Optional[mqtt.Client]:
             
         mqtt_client.connect(mqtt_broker, mqtt_port, 60)
         mqtt_client.loop_start()
-        print(f"[MQTT] ✅ Berhasil terhubung ke {mqtt_broker}:{mqtt_port} via {transport}")
         return mqtt_client
     except Exception as e:
         print(f"[MQTT ERROR] ❌ Gagal koneksi: {e}")
@@ -252,7 +263,7 @@ def create_app() -> Flask:
                     booking_ref.set({"status": "ongoing"}, merge=True)
                     
                     # Tembak perintah MQTT "ON" dan set status station menjadi "occupied"
-                    publish_mqtt_command(loc_id, sta_id, "ON", order_id)
+                    publish_mqtt_command(loc_id, sta_id, "ON")
                     db_client.collection("locations").document(loc_id).collection("stations").document(sta_id).set({"status": "occupied"}, merge=True)
                 
                 now_str = datetime.now(timezone(timedelta(hours=7))).strftime('%H:%M:%S')
@@ -286,14 +297,14 @@ def create_app() -> Flask:
                     booking_ref.set({"status": "completed"}, merge=True)
                     
                     # Tembak perintah MQTT (OFF) dan set status station menjadi "available"
-                    publish_mqtt_command(loc_id, sta_id, "OFF", order_id)
+                    publish_mqtt_command(loc_id, sta_id, "OFF")
                     db_client.collection("locations").document(loc_id).collection("stations").document(sta_id).set({"status": "available"}, merge=True)
                 
                 now_str = datetime.now(timezone(timedelta(hours=7))).strftime('%H:%M:%S')
                 print(f"[SCHEDULER {now_str}] 🔴 Rental Finished: {order_id} is now 'completed'")
 
     # Fungsi untuk mengirim perintah ke MQTT Broker (ON/OFF)
-    def publish_mqtt_command(loc_id: str, sta_id: str, action: str, order_id: str):
+    def publish_mqtt_command(loc_id: str, sta_id: str, action: str):
         mqtt_client = app.config.get("MQTT_CLIENT")
         if not mqtt_client: return
         
@@ -880,7 +891,7 @@ def create_app() -> Flask:
         normalized_body = {k.lower(): v for k, v in body.items()}
             
         db_client.collection("settings").document("global").set(normalized_body, merge=True)
-        return api_response(normalized_body, message="Settings updated in Firestore (normalized to lowercase). Use /admin/settings/reload to apply.")
+        return api_response(normalized_body, message="Settings updated in Firestore. Use /admin/settings/reload to apply.")
 
     # Route POST /admin/settings/reload (me-reload data konfigurasi global dari Firestore)
     @app.post("/admin/settings/reload")
@@ -1465,7 +1476,7 @@ def create_app() -> Flask:
                                 start_dt = datetime.now(wib)
                                 
                             # TODO: Revert 'seconds' to 'minutes' after testing
-                            new_end_dt = start_dt + timedelta(seconds=new_duration_val)
+                            new_end_dt = start_dt + timedelta(minutes=new_duration_val)
                             
                             # Update parent booking document
                             booking_ref = db_client.collection("locations").document(loc_id)\
@@ -1507,7 +1518,7 @@ def create_app() -> Flask:
                     
                     duration_val = int(float(tx_data.get("booking_duration", 0)))
                     # TODO: Revert 'seconds' to 'minutes' after testing
-                    end_dt = start_dt + timedelta(seconds=duration_val)
+                    end_dt = start_dt + timedelta(minutes=duration_val)
                     
                     now_wib = datetime.now(wib)
                     initial_status = "ongoing" if tx_type == "walk-in" or now_wib >= start_dt else "upcoming"
@@ -1531,7 +1542,7 @@ def create_app() -> Flask:
                         .collection("stations").document(sta_id)\
                         .collection("bookings").document(order_id).set(booking_data)
                     
-                    # Proses penjadwalan untuk transaksi booking dan walk-inmelalui scheduler
+                    # Proses penjadwalan untuk transaksi booking dan walk-in melalui scheduler
                     scheduler = app.config.get("SCHEDULER")
                     if scheduler:
                         if initial_status == "upcoming":
@@ -1539,7 +1550,7 @@ def create_app() -> Flask:
                             print(f"[SCHEDULER {now_wib.strftime('%H:%M:%S')}] 📅 🔵 Rental Scheduled: {order_id} will start at {start_dt.strftime('%Y-%m-%d %H:%M:%S')} (Online Booking)")
                             
                         elif initial_status == "ongoing":
-                            publish_mqtt_command(loc_id, sta_id, "ON", order_id)
+                            publish_mqtt_command(loc_id, sta_id, "ON")
                             db_client.collection("locations").document(loc_id).collection("stations").document(sta_id).set({"status": "occupied"}, merge=True)
                             print(f"[SCHEDULER {now_wib.strftime('%H:%M:%S')}] 🟢 Rental Started: {order_id} is now 'ongoing' (Walk-In Instant)")
                         
@@ -1661,7 +1672,7 @@ def create_app() -> Flask:
                         start_dt = datetime.now(wib)
                         
                     # TODO: Revert 'seconds' to 'minutes' after testing
-                    end_dt = start_dt + timedelta(seconds=duration_val)
+                    end_dt = start_dt + timedelta(minutes=duration_val)
                     
                     if now_wib >= end_dt:
                         finish_rental_event(order_id)
